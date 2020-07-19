@@ -18,6 +18,14 @@
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
 
+#include <Windows.h>
+#include <d3d11_4.h>
+#include <dxgi1_5.h>
+
+#include "settings/AdvancedSettings.h"
+#include "settings/SettingsComponent.h"
+
+
 using namespace Microsoft::WRL;
 
 void CRenderBuffer::AppendPicture(const VideoPicture& picture)
@@ -155,6 +163,9 @@ CRenderInfo CRendererBase::GetRenderInfo()
 
 bool CRendererBase::Configure(const VideoPicture& picture, float fps, unsigned orientation)
 {
+  DXGI_ADAPTER_DESC id = {};
+  DX::DeviceResources::Get()->GetAdapterDesc(&id);
+
   m_iNumBuffers = 0;
   m_iBufferIndex = 0;
 
@@ -162,6 +173,18 @@ bool CRendererBase::Configure(const VideoPicture& picture, float fps, unsigned o
   m_sourceHeight = picture.iHeight;
   m_fps = fps;
   m_renderOrientation = orientation;
+
+  if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_autohdr &&
+      picture.color_primaries == AVCOL_PRI_BT2020)
+    DX::Windowing()->WinHDR_ON();
+
+    if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_autohdr &&
+      picture.color_primaries != AVCOL_PRI_BT2020)
+    DX::Windowing()->WinHDR_OFF();
+
+  if (picture.color_primaries != AVCOL_PRI_BT2020 && id.VendorId == 0x1002)
+    DX::Windowing()->SetHdrAMD(false, 0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290, 1.0, 1000,
+                               1000, 100);
 
   return true;
 }
@@ -195,6 +218,8 @@ void CRendererBase::Render(CD3DTexture& target, const CRect& sourceRect, const C
     if (!buf->UploadBuffer())
       return;
   }
+
+  HDR(buf);
 
   if (m_viewWidth != static_cast<unsigned>(viewRect.Width()) ||
     m_viewHeight != static_cast<unsigned>(viewRect.Height()))
@@ -444,4 +469,54 @@ AVPixelFormat CRendererBase::GetAVFormat(DXGI_FORMAT dxgi_format)
   default:
     return AV_PIX_FMT_NONE;
   }
+}
+
+int CRendererBase::HDR(CRenderBuffer * meta)
+{
+  double rx = av_q2d(meta->displayMetadata.display_primaries[0][0]);
+  double ry = av_q2d(meta->displayMetadata.display_primaries[0][1]);
+  double gx = av_q2d(meta->displayMetadata.display_primaries[1][0]);
+  double gy = av_q2d(meta->displayMetadata.display_primaries[1][1]);
+  double bx = av_q2d(meta->displayMetadata.display_primaries[2][0]);
+  double by = av_q2d(meta->displayMetadata.display_primaries[2][1]);
+  double wx = av_q2d(meta->displayMetadata.white_point[0]);
+  double wy = av_q2d(meta->displayMetadata.white_point[1]);
+  double maxmaster = av_q2d(meta->displayMetadata.max_luminance);
+  double minmaster = av_q2d(meta->displayMetadata.min_luminance);
+  double maxFALL = meta->lightMetadata.MaxFALL;
+  double maxCLL = meta->lightMetadata.MaxCLL;
+
+   if (meta->primaries != AVCOL_PRI_BT2020)
+  {
+    DX::Windowing()->SetHdrMonitorMode(false, rx, ry, gx, gy, bx, by, wx, wy, maxmaster, minmaster,
+                                       maxCLL, maxFALL);
+    return 0;
+  }
+
+  if (meta->color_transfer == AVCOL_TRC_SMPTE2084 && meta->primaries == AVCOL_PRI_BT2020 ||
+      meta->color_transfer == AVCOL_TRC_ARIB_STD_B67 && meta->primaries == AVCOL_PRI_BT2020)
+  {
+  DX::Windowing()->SetHdrAMD(true, rx, ry, gx, gy, bx, by, wx, wy, minmaster, maxmaster, maxCLL,
+                                 maxFALL);
+
+  DX::Windowing()->SetHdrMonitorMode(true, rx, ry, gx, gy, bx, by, wx, wy, maxmaster, minmaster,
+                                         maxCLL, maxFALL);
+}
+
+
+
+  CLog::LogF(LOGNOTICE, "Metadata RX: %f.", rx);
+  CLog::LogF(LOGNOTICE, "Metadata RY: %f.", ry);
+  CLog::LogF(LOGNOTICE, "Metadata GX: %f.", gx);
+  CLog::LogF(LOGNOTICE, "Metadata GY: %f.", gy);
+  CLog::LogF(LOGNOTICE, "Metadata BX: %f.", bx);
+  CLog::LogF(LOGNOTICE, "Metadata BY: %f.", by);
+  CLog::LogF(LOGNOTICE, "Metadata WX: %f.", wx);
+  CLog::LogF(LOGNOTICE, "Metadata WY: %f.", wy);
+  CLog::LogF(LOGNOTICE, "Metadata MaxMaster: %f.", maxmaster);
+  CLog::LogF(LOGNOTICE, "Metadata MinMaster: %f.", minmaster);
+  CLog::LogF(LOGNOTICE, "Metadata maxFALL: %f.", maxFALL);
+  CLog::LogF(LOGNOTICE, "Metadata maxCLL: %f.", maxCLL);
+
+  return 0;
 }
