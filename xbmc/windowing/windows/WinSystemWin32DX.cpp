@@ -39,6 +39,12 @@
 #pragma warning(default: 4091)
 #include <detours.h>
 
+#pragma comment(lib, "nvapi64.lib")
+#include "cores/VideoPlayer/nvapi.h"
+
+#pragma comment(lib, "amd_ags_x64.lib")
+#include <amd_ags.h>
+
 using KODI::PLATFORM::WINDOWS::FromW;
 
 // User Mode Driver hooks definitions
@@ -379,4 +385,373 @@ HRESULT APIENTRY HookOpenAdapter10_2(D3D10DDIARG_OPENADAPTER *pOpenData)
     pOpenData->pAdapterFuncs->pfnCreateDevice = HookCreateDevice;
   }
   return hr;
+}
+
+int CWinSystemWin32DX::set12bits()
+{
+  DXGI_ADAPTER_DESC id = {};
+  DX::DeviceResources::Get()->GetAdapterDesc(&id);
+
+  if (id.VendorId != 0x10DE)
+    return 0;
+
+  NvAPI_Initialize();
+
+  NvAPI_Status nvStatus = NVAPI_OK;
+  NvDisplayHandle hNvDisplay = NULL;
+
+  NvU32 gpuCount = 0;
+  NvU32 maxDisplayIndex = 0;
+  NvPhysicalGpuHandle ahGPU[NVAPI_MAX_PHYSICAL_GPUS] = {};
+
+  // get the list of displays connected, populate the dynamic components
+  nvStatus = NvAPI_EnumPhysicalGPUs(ahGPU, &gpuCount);
+
+  for (NvU32 i = 0; i < gpuCount; ++i)
+  {
+    NvU32 displayIdCount = 16;
+    NvU32 flags = 0;
+    NV_GPU_DISPLAYIDS displayIdArray[16] = {};
+    displayIdArray[0].version = NV_GPU_DISPLAYIDS_VER;
+
+    nvStatus = NvAPI_GPU_GetConnectedDisplayIds(ahGPU[i], displayIdArray, &displayIdCount, flags);
+
+    if (NVAPI_OK == nvStatus)
+    {
+      printf("Display count %d\r\n", displayIdCount);
+
+      for (maxDisplayIndex = 0; maxDisplayIndex < displayIdCount; ++maxDisplayIndex)
+      {
+        printf("Display tested %d\r\n", maxDisplayIndex);
+
+          NV_COLOR_DATA colorData;
+          memset(&colorData, 0, sizeof(NV_COLOR_DATA));
+
+          colorData.version = NV_COLOR_DATA_VER;
+          colorData.size = sizeof(NV_COLOR_DATA);
+          colorData.data.bpc = NV_BPC_12;
+	      colorData.data.colorFormat = NV_COLOR_FORMAT_RGB;
+          colorData.cmd = NV_COLOR_CMD_SET;
+
+          nvStatus = NvAPI_Disp_ColorControl(displayIdArray[maxDisplayIndex].displayId, &colorData);
+      }
+    }
+  }
+  return 0;
+}
+
+int CWinSystemWin32DX::WinHDR()
+{
+  uint32_t pathCount = 0;
+  uint32_t modeCount = 0;
+  bool success = false;
+
+  if (ERROR_SUCCESS == GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount))
+  {
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+
+    if (ERROR_SUCCESS == QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(),
+                                            &modeCount, modes.data(), nullptr))
+    {
+      DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO getColorInfo = {};
+      getColorInfo.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+      getColorInfo.header.size = sizeof(getColorInfo);
+
+      DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE setColorState = {};
+      setColorState.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE;
+      setColorState.header.size = sizeof(setColorState);
+
+      for (const auto& mode : modes)
+      {
+        if (mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
+        {
+          getColorInfo.header.adapterId.HighPart = mode.adapterId.HighPart;
+          getColorInfo.header.adapterId.LowPart = mode.adapterId.LowPart;
+          getColorInfo.header.id = mode.id;
+
+          setColorState.header.adapterId.HighPart = mode.adapterId.HighPart;
+          setColorState.header.adapterId.LowPart = mode.adapterId.LowPart;
+          setColorState.header.id = mode.id;
+
+          if (ERROR_SUCCESS == DisplayConfigGetDeviceInfo(&getColorInfo.header))
+          {
+            // HDR is OFF
+            if (getColorInfo.advancedColorSupported && !getColorInfo.advancedColorEnabled)
+            {
+              setColorState.enableAdvancedColor = TRUE;
+              CLog::LogF(LOGNOTICE, "Toggle Windows HDR On (OFF => ON).");
+              success = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setColorState.header));
+              break;
+            }
+            // HDR is ON
+            else if (getColorInfo.advancedColorSupported && getColorInfo.advancedColorEnabled)
+            {
+              setColorState.enableAdvancedColor = FALSE;
+              CLog::LogF(LOGNOTICE, "Toggle Windows HDR Off (ON => OFF).");
+              success = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setColorState.header));
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return 0;
+}
+
+int CWinSystemWin32DX::WinHDR_ON()
+{
+  uint32_t pathCount = 0;
+  uint32_t modeCount = 0;
+  bool success = false;
+
+  if (ERROR_SUCCESS == GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount))
+  {
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+
+    if (ERROR_SUCCESS == QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(),
+                                            &modeCount, modes.data(), nullptr))
+    {
+      DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO getColorInfo = {};
+      getColorInfo.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+      getColorInfo.header.size = sizeof(getColorInfo);
+
+      DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE setColorState = {};
+      setColorState.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE;
+      setColorState.header.size = sizeof(setColorState);
+
+      for (const auto& mode : modes)
+      {
+        if (mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
+        {
+          getColorInfo.header.adapterId.HighPart = mode.adapterId.HighPart;
+          getColorInfo.header.adapterId.LowPart = mode.adapterId.LowPart;
+          getColorInfo.header.id = mode.id;
+
+          setColorState.header.adapterId.HighPart = mode.adapterId.HighPart;
+          setColorState.header.adapterId.LowPart = mode.adapterId.LowPart;
+          setColorState.header.id = mode.id;
+
+          if (ERROR_SUCCESS == DisplayConfigGetDeviceInfo(&getColorInfo.header))
+          {
+            // HDR is OFF
+            if (getColorInfo.advancedColorSupported && !getColorInfo.advancedColorEnabled)
+            {
+              setColorState.enableAdvancedColor = TRUE;
+              success = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setColorState.header));
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return 0;
+}
+
+
+int CWinSystemWin32DX::WinHDR_OFF()
+{
+  uint32_t pathCount = 0;
+  uint32_t modeCount = 0;
+  bool success = false;
+
+  if (ERROR_SUCCESS == GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount))
+  {
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+
+    if (ERROR_SUCCESS == QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(),
+                                            &modeCount, modes.data(), nullptr))
+    {
+      DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO getColorInfo = {};
+      getColorInfo.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+      getColorInfo.header.size = sizeof(getColorInfo);
+
+      DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE setColorState = {};
+      setColorState.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE;
+      setColorState.header.size = sizeof(setColorState);
+
+      for (const auto& mode : modes)
+      {
+        if (mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
+        {
+          getColorInfo.header.adapterId.HighPart = mode.adapterId.HighPart;
+          getColorInfo.header.adapterId.LowPart = mode.adapterId.LowPart;
+          getColorInfo.header.id = mode.id;
+
+          setColorState.header.adapterId.HighPart = mode.adapterId.HighPart;
+          setColorState.header.adapterId.LowPart = mode.adapterId.LowPart;
+          setColorState.header.id = mode.id;
+
+          if (ERROR_SUCCESS == DisplayConfigGetDeviceInfo(&getColorInfo.header))
+          {
+            setColorState.enableAdvancedColor = FALSE;
+            success = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setColorState.header));
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
+
+
+void CWinSystemWin32DX::SetHdrAMD(bool enableHDR,
+                                  double rx,
+                                  double ry,
+                                  double gx,
+                                  double gy,
+                                  double bx,
+                                  double by,
+                                  double wx,
+                                  double wy,
+                                  double minMaster,
+                                  double maxMaster,
+                                  double maxCLL,
+                                  double maxFALL)
+{
+  DXGI_ADAPTER_DESC id = {};
+  DX::DeviceResources::Get()->GetAdapterDesc(&id);
+
+  if (id.VendorId == 0x1002)
+  {
+    if ((agsInit) && (agsDeInit) && (agsSetDisplayMode))
+    {
+      AGSContext* context = NULL;
+      AGSGPUInfo gpuInfo;
+      memset(&gpuInfo, 0, sizeof(gpuInfo));
+
+
+      if (agsInit(&context, NULL, &gpuInfo) == AGS_SUCCESS)
+      {
+        for (int i1 = 0; i1 < gpuInfo.numDevices; i1++)
+          for (int i2 = 0; i2 < gpuInfo.devices[i1].numDisplays; i2++)
+            if (gpuInfo.devices[i1].displays[i2].displayDeviceName)
+            {
+              AGSDisplaySettings settings;
+              ZeroMemory(&settings, sizeof(settings));
+              settings.mode =
+                  enableHDR ? AGSDisplaySettings::Mode_HDR10_PQ : AGSDisplaySettings::Mode_SDR;
+              if (enableHDR)
+              {
+                settings.chromaticityRedX = (rx);
+                settings.chromaticityRedY = (ry);
+                settings.chromaticityGreenX = (gx);
+                settings.chromaticityGreenY = (gy);
+                settings.chromaticityBlueX = (bx);
+                settings.chromaticityBlueY = (by);
+                settings.chromaticityWhitePointX = (wx);
+                settings.chromaticityWhitePointY = (wy);
+                settings.minLuminance = (minMaster);
+                settings.maxLuminance = (maxMaster);
+                settings.maxContentLightLevel = (maxCLL);
+                settings.maxFrameAverageLightLevel = (maxFALL);
+                settings.flags = 0;
+              }
+              agsSetDisplayMode(context, i1, i2, &settings) == AGS_SUCCESS;
+            }
+         agsDeInit(context);
+      }
+    }
+  }
+}
+
+void CWinSystemWin32DX::SetHdrMonitorMode(bool enableHDR,
+                                          double rx,
+                                          double ry,
+                                          double gx,
+                                          double gy,
+                                          double bx,
+                                          double by,
+                                          double wx,
+                                          double wy,
+                                          double minMaster,
+                                          double maxMaster,
+                                          double maxCLL,
+                                          double maxFALL)
+{
+  DXGI_ADAPTER_DESC id = {};
+  DX::DeviceResources::Get()->GetAdapterDesc(&id);
+
+  if (id.VendorId == 0x10DE)
+  {
+    NvAPI_Initialize();
+
+    NvAPI_Status nvStatus = NVAPI_OK;
+    NvDisplayHandle hNvDisplay = NULL;
+
+    NvU32 gpuCount = 0;
+    NvU32 maxDisplayIndex = 0;
+    NvPhysicalGpuHandle ahGPU[NVAPI_MAX_PHYSICAL_GPUS] = {};
+
+    // get the list of displays connected, populate the dynamic components
+    nvStatus = NvAPI_EnumPhysicalGPUs(ahGPU, &gpuCount);
+
+    for (NvU32 i = 0; i < gpuCount; ++i)
+    {
+      NvU32 displayIdCount = 16;
+      NvU32 flags = 0;
+      NV_GPU_DISPLAYIDS displayIdArray[16] = {};
+      displayIdArray[0].version = NV_GPU_DISPLAYIDS_VER;
+
+      nvStatus = NvAPI_GPU_GetConnectedDisplayIds(ahGPU[i], displayIdArray, &displayIdCount, flags);
+
+      if (NVAPI_OK == nvStatus)
+      {
+        printf("Display count %d\r\n", displayIdCount);
+
+        for (maxDisplayIndex = 0; maxDisplayIndex < displayIdCount; ++maxDisplayIndex)
+        {
+          printf("Display tested %d\r\n", maxDisplayIndex);
+
+          NV_HDR_CAPABILITIES hdrCapabilities = {};
+
+          hdrCapabilities.version = NV_HDR_CAPABILITIES_VER;
+
+          if (NVAPI_OK == NvAPI_Disp_GetHdrCapabilities(displayIdArray[maxDisplayIndex].displayId,
+                                                        &hdrCapabilities))
+          {
+
+            if (hdrCapabilities.isST2084EotfSupported)
+            {
+              NV_HDR_COLOR_DATA hdrColorData = {};
+
+              memset(&hdrColorData, 0, sizeof(hdrColorData));
+
+              hdrColorData.version = NV_HDR_COLOR_DATA_VER;
+              hdrColorData.cmd = NV_HDR_CMD_SET;
+              hdrColorData.static_metadata_descriptor_id = NV_STATIC_METADATA_TYPE_1;
+
+              hdrColorData.hdrMode = enableHDR ? NV_HDR_MODE_UHDA_PASSTHROUGH : NV_HDR_MODE_OFF;
+              //						hdrColorData.hdrMode = enableHDR ? NV_HDR_MODE_DOLBY_VISION : NV_HDR_MODE_OFF;
+
+              hdrColorData.static_metadata_descriptor_id = NV_STATIC_METADATA_TYPE_1;
+
+              hdrColorData.mastering_display_data.displayPrimary_x0 = (rx);
+              hdrColorData.mastering_display_data.displayPrimary_y0 = (ry);
+              hdrColorData.mastering_display_data.displayPrimary_x1 = (gx);
+              hdrColorData.mastering_display_data.displayPrimary_y1 = (gy);
+              hdrColorData.mastering_display_data.displayPrimary_x2 = (bx);
+              hdrColorData.mastering_display_data.displayPrimary_y2 = (by);
+              hdrColorData.mastering_display_data.displayWhitePoint_x = (wx);
+              hdrColorData.mastering_display_data.displayWhitePoint_y = (wy);
+              hdrColorData.mastering_display_data.max_content_light_level = (maxCLL);
+              hdrColorData.mastering_display_data.max_display_mastering_luminance = (maxMaster);
+              hdrColorData.mastering_display_data.max_frame_average_light_level = (maxFALL);
+              hdrColorData.mastering_display_data.min_display_mastering_luminance = (minMaster);
+
+              nvStatus = NvAPI_Disp_HdrColorControl(displayIdArray[maxDisplayIndex].displayId,
+                                                    &hdrColorData);
+            }
+          }
+        }
+      }
+    }
+  }
 }
