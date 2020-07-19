@@ -85,8 +85,15 @@ add_custom_target(${APP_NAME_LC}-libraries)
 set(LIBRARY_FILES "" CACHE STRING "" FORCE)
 mark_as_advanced(LIBRARY_FILES)
 
+include_directories(${CMAKE_SOURCE_DIR}/lib/nvapi)
+include_directories(${CMAKE_SOURCE_DIR}/lib/ags_libs)
+link_directories(${CMAKE_SOURCE_DIR}/lib/nvapi)
+link_directories(${CMAKE_SOURCE_DIR}/lib/ags_libs)
+
 set(INCLUDES ${CMAKE_SOURCE_DIR}
              ${CMAKE_SOURCE_DIR}/lib
+             ${CMAKE_SOURCE_DIR}/lib/nvapi
+			       ${CMAKE_SOURCE_DIR}/lib/ags_libs
              ${CMAKE_SOURCE_DIR}/xbmc
              ${CMAKE_SOURCE_DIR}/xbmc/${PLATFORM_DIR}
              ${CMAKE_SOURCE_DIR}/xbmc/cores/VideoPlayer
