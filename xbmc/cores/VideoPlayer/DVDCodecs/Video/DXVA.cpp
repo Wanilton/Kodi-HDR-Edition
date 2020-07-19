@@ -247,7 +247,7 @@ void CContext::Release(CDecoder* decoder)
 
 void CContext::Close()
 {
-  CLog::LogFunction(LOGNOTICE, "DXVA", "closing decoder context.");
+  CLog::LogFunction(LOGINFO, "DXVA", "closing decoder context.");
   DestroyContext();
 }
 
@@ -281,32 +281,38 @@ bool CContext::CreateContext()
   ComPtr<ID3D11DeviceContext> pD3DDeviceContext;
   m_sharingAllowed = DX::DeviceResources::Get()->DoesTextureSharingWork();
 
+  // Workaround for Nvidia stuttering on 4K HDR playback
+  // Some tests/feedback on Windows 10 2004 / NV driver 446.14
+  // Not needed: GTX 1650, GTX 1060, ...
+  // Needed: RTX 2080 Ti, ...
+  if (m_sharingAllowed &&
+      CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_disableDXVAdiscreteDecoding)
+  {
+    m_sharingAllowed = false;
+    CLog::LogF(LOGWARNING, "disabled discrete d3d11va device for decoding due advancedsettings "
+                           "option 'disableDXVAdiscretedecoder'.");
+  }
+
   if (m_sharingAllowed)
   {
     CLog::LogF(LOGWARNING, "creating discrete d3d11va device for decoding.");
 
-    D3D_FEATURE_LEVEL featureLevels[] =
-    {
-      D3D_FEATURE_LEVEL_11_1,
-      D3D_FEATURE_LEVEL_11_0,
-      D3D_FEATURE_LEVEL_10_1,
-      D3D_FEATURE_LEVEL_10_0,
-      D3D_FEATURE_LEVEL_9_3,
-      D3D_FEATURE_LEVEL_9_2,
-      D3D_FEATURE_LEVEL_9_1
-    };
+    std::vector<D3D_FEATURE_LEVEL> featureLevels;
+    if (CSysInfo::IsWindowsVersionAtLeast(CSysInfo::WindowsVersionWin10))
+      featureLevels.push_back(D3D_FEATURE_LEVEL_12_0);
+    if (CSysInfo::IsWindowsVersionAtLeast(CSysInfo::WindowsVersionWin8))
+      featureLevels.push_back(D3D_FEATURE_LEVEL_11_1);
+    featureLevels.push_back(D3D_FEATURE_LEVEL_11_0);
+    featureLevels.push_back(D3D_FEATURE_LEVEL_10_1);
+    featureLevels.push_back(D3D_FEATURE_LEVEL_10_0);
+    featureLevels.push_back(D3D_FEATURE_LEVEL_9_3);
+    featureLevels.push_back(D3D_FEATURE_LEVEL_9_2);
+    featureLevels.push_back(D3D_FEATURE_LEVEL_9_1);
 
-    hr = D3D11CreateDevice(
-        DX::DeviceResources::Get()->GetAdapter(),
-        D3D_DRIVER_TYPE_UNKNOWN,
-        nullptr,
-        D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-        featureLevels,
-        ARRAYSIZE(featureLevels),
-        D3D11_SDK_VERSION,
-        &pD3DDevice,
-        nullptr,
-        &pD3DDeviceContext);
+    hr = D3D11CreateDevice(DX::DeviceResources::Get()->GetAdapter(), D3D_DRIVER_TYPE_UNKNOWN,
+                           nullptr, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, featureLevels.data(),
+                           featureLevels.size(), D3D11_SDK_VERSION, &pD3DDevice, nullptr,
+                           &pD3DDeviceContext);
 
     if (SUCCEEDED(hr))
     {
@@ -367,7 +373,7 @@ void CContext::QueryCaps()
   {
     if (FAILED(m_pD3D11Device->GetVideoDecoderProfile(i, &m_input_list[i])))
     {
-      CLog::LogFunction(LOGNOTICE, "DXVA", "failed getting video decoder profile");
+      CLog::LogFunction(LOGINFO, "DXVA", "failed getting video decoder profile");
       return;
     }
     const dxva2_mode_t* mode = dxva2_find_mode(&m_input_list[i]);
@@ -429,7 +435,8 @@ bool CContext::GetFormatAndConfig(AVCodecContext* avctx, D3D11_VIDEO_DECODER_DES
       HRESULT res = m_pD3D11Device->CheckVideoDecoderFormat(mode.guid, render_targets_dxgi[j], &format_supported);
       if (FAILED(res) || !format_supported)
       {
-        CLog::LogFunction(LOGNOTICE, "DXVA", "Ouput format %d is not supported by '%s'", render_targets_dxgi[j], mode.name);
+        CLog::LogFunction(LOGINFO, "DXVA", "Ouput format %d is not supported by '%s'",
+                          render_targets_dxgi[j], mode.name);
         continue;
       }
 
@@ -457,12 +464,13 @@ bool CContext::GetConfig(const D3D11_VIDEO_DECODER_DESC &format, D3D11_VIDEO_DEC
   UINT cfg_count = 0;
   if (FAILED(m_pD3D11Device->GetVideoDecoderConfigCount(&format, &cfg_count)))
   {
-    CLog::LogF(LOGNOTICE, "failed getting decoder configuration count.");
+    CLog::LogF(LOGINFO, "failed getting decoder configuration count.");
     return false;
   }
   if (!cfg_count)
   {
-    CLog::LogF(LOGNOTICE, "no decoder configuration possible for %dx%d (%d).", format.SampleWidth, format.SampleHeight, format.OutputFormat);
+    CLog::LogF(LOGINFO, "no decoder configuration possible for %dx%d (%d).", format.SampleWidth,
+               format.SampleHeight, format.OutputFormat);
     return false;
   }
 
@@ -473,7 +481,7 @@ bool CContext::GetConfig(const D3D11_VIDEO_DECODER_DESC &format, D3D11_VIDEO_DEC
     D3D11_VIDEO_DECODER_CONFIG pConfig = {};
     if (FAILED(m_pD3D11Device->GetVideoDecoderConfig(&format, i, &pConfig)))
     {
-      CLog::LogF(LOGNOTICE, "failed getting decoder configuration.");
+      CLog::LogF(LOGINFO, "failed getting decoder configuration.");
       return false;
     }
 
@@ -601,7 +609,7 @@ bool CContext::CreateDecoder(const D3D11_VIDEO_DECODER_DESC &format, const D3D11
 
     if (retry == 0)
     {
-      CLog::LogF(LOGNOTICE, "hw may not support multiple decoders, releasing existing ones.");
+      CLog::LogF(LOGINFO, "hw may not support multiple decoders, releasing existing ones.");
       for (auto& m_decoder : m_decoders)
         m_decoder->CloseDXVADecoder();
     }
@@ -995,7 +1003,7 @@ void CDecoder::Close()
   if (m_dxvaContext)
   {
     auto dxva_context = m_dxvaContext;
-    CLog::LogF(LOGNOTICE, "closing decoder.");
+    CLog::LogF(LOGINFO, "closing decoder.");
     m_dxvaContext = nullptr;
     dxva_context->Release(this);
   }

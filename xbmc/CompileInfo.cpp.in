@@ -55,6 +55,11 @@ const char* CCompileInfo::GetSCMID()
   return "@APP_SCMID@";
 }
 
+std::string CCompileInfo::GetOfficialAddonRepos()
+{
+  return "@APP_ADDON_REPOS@";
+}
+
 const char* CCompileInfo::GetCopyrightYears()
 {
   return "@APP_COPYRIGHT_YEARS@";
@@ -69,4 +74,9 @@ std::string CCompileInfo::GetBuildDate()
     return datestamp;
   }
   return "1970-01-01";
+}
+
+const char*  CCompileInfo::GetVersionCode()
+{
+  return "@APP_VERSION_CODE@";
 }

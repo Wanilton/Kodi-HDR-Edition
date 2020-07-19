@@ -9,13 +9,14 @@
 #pragma once
 
 #include "XBDateTime.h"
-#include "addons/kodi-addon-dev-kit/include/kodi/xbmc_pvr_types.h"
+#include "addons/kodi-addon-dev-kit/include/kodi/c-api/addon-instance/pvr/pvr_epg.h"
 #include "pvr/settings/PVRSettings.h"
 #include "threads/CriticalSection.h"
 #include "threads/Event.h"
 #include "threads/Thread.h"
 #include "utils/EventStream.h"
 
+#include <atomic>
 #include <list>
 #include <map>
 #include <memory>
@@ -33,6 +34,8 @@ namespace PVR
   class CPVREpgInfoTag;
 
   enum class PVREvent;
+
+  struct PVREpgSearchData;
 
   class CPVREpgContainer : private CThread
   {
@@ -85,10 +88,9 @@ namespace PVR
     /*!
      * @brief Delete an EPG table from this container.
      * @param epg The table to delete.
-     * @param bDeleteFromDatabase Delete this table from the database too if true.
      * @return True on success, false otherwise.
      */
-    bool DeleteEpg(const std::shared_ptr<CPVREpg>& epg, bool bDeleteFromDatabase = false);
+    bool DeleteEpg(const std::shared_ptr<CPVREpg>& epg);
 
     /*!
      * @brief CEventStream callback for PVR events.
@@ -147,16 +149,11 @@ namespace PVR
     std::shared_ptr<CPVREpgInfoTag> GetTagById(const std::shared_ptr<CPVREpg>& epg, unsigned int iBroadcastId) const;
 
     /*!
-     * @brief Get all EPG tags.
-     * @return The tags.
+     * @brief Get all EPG tags matching the given search criteria.
+     * @param searchData The search criteria.
+     * @return The matching tags.
      */
-    std::vector<std::shared_ptr<CPVREpgInfoTag>> GetAllTags() const;
-
-    /*!
-     * @brief Check whether data should be persisted to the EPG database.
-     * @return True if data should be persisted to the EPG database, false otherwise.
-     */
-    bool UseDatabase() const;
+    std::vector<std::shared_ptr<CPVREpgInfoTag>> GetTags(const PVREpgSearchData& searchData) const;
 
     /*!
      * @brief Notify EPG container that there are pending manual EPG updates
@@ -200,6 +197,16 @@ namespace PVR
      */
     void OnPlaybackStopped();
 
+    /*!
+     * @brief Inform the epg container that the system is going to sleep
+     */
+    void OnSystemSleep();
+
+    /*!
+     * @brief Inform the epg container that the system gets awake from sleep
+     */
+    void OnSystemWake();
+
   private:
     /*!
      * @brief Notify EPG table observers when the currently active tag changed.
@@ -220,9 +227,11 @@ namespace PVR
 
     /*!
      * @brief Call Persist() on each table
+     * @param iMaxTimeslice time in milliseconds for max processing. Return after this time
+     *        even if not all data was persisted, unless value is -1
      * @return True when they all were persisted, false otherwise.
      */
-    bool PersistAll();
+    bool PersistAll(unsigned int iMaxTimeslice) const;
 
     /*!
      * @brief Remove old EPG entries.
@@ -288,5 +297,7 @@ namespace PVR
     bool m_bUpdateNotificationPending = false; /*!< true while an epg updated notification to observers is pending. */
     CPVRSettings m_settings;
     CEventSource<PVREvent> m_events;
+
+    std::atomic<bool> m_bSuspended = {false};
   };
 }

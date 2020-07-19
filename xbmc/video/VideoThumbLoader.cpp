@@ -23,6 +23,7 @@
 #include "guilib/StereoscopicsManager.h"
 #include "music/MusicDatabase.h"
 #include "settings/AdvancedSettings.h"
+#include "settings/SettingUtils.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "settings/lib/Setting.h"
@@ -84,6 +85,7 @@ bool CThumbExtractor::DoWork()
   ||  URIUtils::IsPVRRecording(m_item.GetDynPath())
   ||  URIUtils::IsUPnP(m_item.GetPath())
   ||  URIUtils::IsBluray(m_item.GetPath())
+  ||  URIUtils::IsPlugin(m_item.GetDynPath()) // plugin path not fully resolved
   ||  m_item.IsBDFile()
   ||  m_item.IsDVD()
   ||  m_item.IsDiscImage()
@@ -347,7 +349,7 @@ bool CVideoThumbLoader::LoadItemCached(CFileItem* pItem)
       if (!art.empty())
         artwork.insert(std::make_pair(type, art));
     }
-    SetArt(*pItem, artwork);
+    pItem->AppendArt(artwork);
   }
 
   // hide thumb if episode is unwatched 
@@ -355,10 +357,8 @@ bool CVideoThumbLoader::LoadItemCached(CFileItem* pItem)
     CServiceBroker::GetSettingsComponent()->GetSettings()->GetSetting(CSettings::SETTING_VIDEOLIBRARY_SHOWUNWATCHEDPLOTS)));
   if (pItem->HasArt("thumb") && pItem->HasVideoInfoTag() &&
       pItem->GetVideoInfoTag()->m_type == MediaTypeEpisode &&
-      pItem->GetVideoInfoTag()->GetPlayCount() == 0 &&
-      setting && 
-      !setting->FindIntInList(CSettings::VIDEOLIBRARY_THUMB_SHOW_UNWATCHED_EPISODE)
-     )
+      pItem->GetVideoInfoTag()->GetPlayCount() == 0 && setting &&
+      !CSettingUtils::FindIntInList(setting, CSettings::VIDEOLIBRARY_THUMB_SHOW_UNWATCHED_EPISODE))
   {
     // use fanart if available
     if (pItem->HasArt("fanart"))
@@ -426,7 +426,7 @@ bool CVideoThumbLoader::LoadItemLookup(CFileItem* pItem)
       }
     }
   }
-  SetArt(*pItem, artwork);
+  pItem->AppendArt(artwork);
 
   // We can only extract flags/thumbs for file-like items
   if (!pItem->m_bIsFolder && pItem->IsVideo())
@@ -490,18 +490,6 @@ bool CVideoThumbLoader::LoadItemLookup(CFileItem* pItem)
   return true;
 }
 
-void CVideoThumbLoader::SetArt(CFileItem &item, const std::map<std::string, std::string> &artwork)
-{
-  item.SetArt(artwork);
-  if (artwork.find("thumb") == artwork.end())
-  { // set fallback for "thumb"
-    if (artwork.find("poster") != artwork.end())
-      item.SetArtFallback("thumb", "poster");
-    else if (artwork.find("banner") != artwork.end())
-      item.SetArtFallback("thumb", "banner");
-  }
-}
-
 bool CVideoThumbLoader::FillLibraryArt(CFileItem &item)
 {
   CVideoInfoTag &tag = *item.GetVideoInfoTag();
@@ -510,7 +498,7 @@ bool CVideoThumbLoader::FillLibraryArt(CFileItem &item)
     std::map<std::string, std::string> artwork;
     m_videoDatabase->Open();
     if (m_videoDatabase->GetArtForItem(tag.m_iDbId, tag.m_type, artwork))
-      SetArt(item, artwork);
+      item.AppendArt(artwork);
     else if (tag.m_type == "actor" && !tag.m_artist.empty())
     { // we retrieve music video art from the music database (no backward compat)
       CMusicDatabase database;

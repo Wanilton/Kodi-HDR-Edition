@@ -98,7 +98,7 @@ cmake_install.cmake
 /kodi-test
 /kodi-xrandr
 /*.patch
-/kodi-build/
+/kodi-build*/
 /gtestresults.xml
 
 # /addons/
@@ -118,6 +118,7 @@ cmake_install.cmake
 /addons/kodi.binary.global.gui/addon.xml
 /addons/kodi.binary.global.main/addon.xml
 /addons/kodi.binary.global.network/addon.xml
+/addons/kodi.binary.global.tools/addon.xml
 /addons/kodi.binary.instance.audiodecoder/addon.xml
 /addons/kodi.binary.instance.audioencoder/addon.xml
 /addons/kodi.binary.instance.game/addon.xml
@@ -321,9 +322,6 @@ cmake_install.cmake
 # Doxygen generated files
 /docs/html
 exclude_dll.txt
-
-#certificates
-/system/certs/
 
 # VS git tools doesn't work for true out of tree builds and it's
 # useful to be able to work on multiple configs

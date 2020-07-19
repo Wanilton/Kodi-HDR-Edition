@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2010-2018 Team Kodi
+ *  Copyright (C) 2010-2020 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -71,7 +71,7 @@ bool CFileUtils::RenameFile(const std::string &strFile)
   if (CGUIKeyboardFactory::ShowAndGetInput(strFileName, CVariant{g_localizeStrings.Get(16013)}, false))
   {
     strPath = URIUtils::AddFileToFolder(strPath, strFileName);
-    CLog::Log(LOGINFO,"FileUtils: rename %s->%s\n", strFileAndPath.c_str(), strPath.c_str());
+    CLog::Log(LOGINFO, "FileUtils: rename %s->%s", strFileAndPath.c_str(), strPath.c_str());
     if (URIUtils::IsMultiPath(strFileAndPath))
     { // special case for multipath renames - rename all the paths.
       std::vector<std::string> paths;
@@ -144,23 +144,35 @@ bool CFileUtils::RemoteAccessAllowed(const std::string &strPath)
   {
     VECSOURCES* sources = CMediaSourceSettings::GetInstance().GetSources(sourceName);
     int sourceIndex = CUtil::GetMatchingSource(realPath, *sources, isSource);
-    if (sourceIndex >= 0 && sourceIndex < (int)sources->size() && sources->at(sourceIndex).m_iHasLock != 2 && sources->at(sourceIndex).m_allowSharing)
+    if (sourceIndex >= 0 && sourceIndex < static_cast<int>(sources->size()) &&
+        sources->at(sourceIndex).m_iHasLock != LOCK_STATE_LOCKED &&
+        sources->at(sourceIndex).m_allowSharing)
       return true;
-  }  
+  }
   // Check auto-mounted sources
   VECSOURCES sources;
   CServiceBroker::GetMediaManager().GetRemovableDrives(
       sources); // Sources returned allways have m_allowsharing = true
   //! @todo Make sharing of auto-mounted sources user configurable
   int sourceIndex = CUtil::GetMatchingSource(realPath, sources, isSource);
-  if (sourceIndex >= 0 && sourceIndex < static_cast<int>(sources.size()) && 
-      sources.at(sourceIndex).m_iHasLock != 2 && sources.at(sourceIndex).m_allowSharing)
+  if (sourceIndex >= 0 && sourceIndex < static_cast<int>(sources.size()) &&
+      sources.at(sourceIndex).m_iHasLock != LOCK_STATE_LOCKED &&
+      sources.at(sourceIndex).m_allowSharing)
     return true;
 
   return false;
 }
 
-CDateTime CFileUtils::GetModificationDate(const std::string& strFileNameAndPath, const bool& bUseLatestDate)
+CDateTime CFileUtils::GetModificationDate(const std::string& strFileNameAndPath,
+                                          const bool& bUseLatestDate)
+{
+  if (bUseLatestDate)
+    return GetModificationDate(1, strFileNameAndPath);
+  else
+    return GetModificationDate(0, strFileNameAndPath);
+}
+
+CDateTime CFileUtils::GetModificationDate(const int& code, const std::string& strFileNameAndPath)
 {
   CDateTime dateAdded;
   if (strFileNameAndPath.empty())
@@ -178,33 +190,46 @@ CDateTime CFileUtils::GetModificationDate(const std::string& strFileNameAndPath,
     if (URIUtils::IsInArchive(file))
       file = CURL(file).GetHostName();
 
-    // Let's try to get the modification datetime
+    // Try to get ctime (creation on Windows, metadata change on Linux) and mtime (modification)
     struct __stat64 buffer;
     if (CFile::Stat(file, &buffer) == 0 && (buffer.st_mtime != 0 || buffer.st_ctime != 0))
     {
       time_t now = time(NULL);
       time_t addedTime;
-      // Prefer the modification time if it's valid
-      if (!bUseLatestDate)
+      // Prefer the modification time if it's valid, fallback to ctime
+      if (code == 0)
       {
-        if (buffer.st_mtime != 0 && (time_t)buffer.st_mtime <= now)
-          addedTime = (time_t)buffer.st_mtime;
+        if (buffer.st_mtime != 0 && static_cast<time_t>(buffer.st_mtime) <= now)
+          addedTime = static_cast<time_t>(buffer.st_mtime);
         else
-          addedTime = (time_t)buffer.st_ctime;
+          addedTime = static_cast<time_t>(buffer.st_ctime);
       }
-      // Use the newer of the creation and modification time
-      else
+      // Use the later of the ctime and mtime
+      else if (code == 1)
       {
-        addedTime = std::max((time_t)buffer.st_ctime, (time_t)buffer.st_mtime);
+        addedTime =
+            std::max(static_cast<time_t>(buffer.st_ctime), static_cast<time_t>(buffer.st_mtime));
         // if the newer of the two dates is in the future, we try it with the older one
         if (addedTime > now)
-          addedTime = std::min((time_t)buffer.st_ctime, (time_t)buffer.st_mtime);
+          addedTime =
+              std::min(static_cast<time_t>(buffer.st_ctime), static_cast<time_t>(buffer.st_mtime));
       }
+      // Perfer the earliest of ctime and mtime, fallback to other
+      else
+      {
+        addedTime =
+            std::min(static_cast<time_t>(buffer.st_ctime), static_cast<time_t>(buffer.st_mtime));
+        // if the older of the two dates is invalid, we try it with the newer one
+        if (addedTime == 0)
+          addedTime =
+              std::max(static_cast<time_t>(buffer.st_ctime), static_cast<time_t>(buffer.st_mtime));
+      }
+
 
       // make sure the datetime does is not in the future
       if (addedTime <= now)
       {
-        struct tm *time;
+        struct tm* time;
 #ifdef HAVE_LOCALTIME_R
         struct tm result = {};
         time = localtime_r(&addedTime, &result);
@@ -218,7 +243,8 @@ CDateTime CFileUtils::GetModificationDate(const std::string& strFileNameAndPath,
   }
   catch (...)
   {
-    CLog::Log(LOGERROR, "%s unable to extract modification date for file (%s)", __FUNCTION__, strFileNameAndPath.c_str());
+    CLog::Log(LOGERROR, "%s unable to extract modification date for file (%s)", __FUNCTION__,
+              strFileNameAndPath.c_str());
   }
   return dateAdded;
 }

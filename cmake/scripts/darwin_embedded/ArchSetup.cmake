@@ -19,9 +19,7 @@ set(CMAKE_SYSTEM_NAME Darwin)
 if(WITH_ARCH)
   set(ARCH ${WITH_ARCH})
 else()
-  if(CPU STREQUAL armv7)
-    set(ARCH arm)
-  elseif(CPU STREQUAL arm64)
+  if(CPU STREQUAL arm64)
     set(ARCH aarch64)
   else()
     message(SEND_ERROR "Unknown CPU: ${CPU}")
@@ -39,7 +37,7 @@ list(APPEND DEPLIBS "-framework CoreFoundation" "-framework CoreVideo"
                     "-framework Foundation" "-framework UIKit"
                     "-framework CoreMedia" "-framework AVFoundation"
                     "-framework VideoToolbox" "-lresolv" "-ObjC"
-                    "-framework AVKit")
+                    "-framework AVKit" "-framework GameController")
 
 set(ENABLE_OPTICAL OFF CACHE BOOL "" FORCE)
 

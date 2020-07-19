@@ -137,6 +137,9 @@ namespace PVR
 
   class AsyncDeleteRecording : public AsyncRecordingAction
   {
+  public:
+    explicit AsyncDeleteRecording(bool bWatchedOnly = false) : m_bWatchedOnly(bWatchedOnly) {}
+
   private:
     bool DoRun(const std::shared_ptr<CFileItem>& item) override
     {
@@ -153,13 +156,13 @@ namespace PVR
       bool bReturn = true;
       for (const auto& itemToDelete : items)
       {
-        if (itemToDelete->IsUsablePVRRecording())
+        if (itemToDelete->IsUsablePVRRecording() &&
+            (!m_bWatchedOnly || itemToDelete->GetPVRRecordingInfoTag()->GetPlayCount() > 0))
           bReturn &= itemToDelete->GetPVRRecordingInfoTag()->Delete();
-        else
-          CLog::LogF(LOGERROR, "Cannot delete item '%s': no valid recording tag", itemToDelete->GetPath().c_str());
       }
       return bReturn;
     }
+    bool m_bWatchedOnly = false;
   };
 
   class AsyncEmptyRecordingsTrash : public AsyncRecordingAction
@@ -222,7 +225,7 @@ namespace PVR
       CSettings::SETTING_PVRRECORD_INSTANTRECORDTIME,
       CSettings::SETTING_PVRRECORD_INSTANTRECORDACTION,
       CSettings::SETTING_PVRPLAYBACK_CONFIRMCHANNELSWITCH,
-      CSettings::SETTING_PVRPLAYBACK_SWITCHTOFULLSCREEN,
+      CSettings::SETTING_PVRPLAYBACK_SWITCHTOFULLSCREENCHANNELTYPES,
       CSettings::SETTING_PVRPARENTAL_PIN,
       CSettings::SETTING_PVRPARENTAL_ENABLED,
       CSettings::SETTING_PVRPOWERMANAGEMENT_DAILYWAKEUPTIME,
@@ -414,8 +417,13 @@ namespace PVR
     if (CheckParentalLock(channel) != ParentalCheckResult::SUCCESS)
       return false;
 
-    const std::shared_ptr<CPVREpgInfoTag> epgTag(CPVRItem(item).GetEpgInfoTag());
-    if (!epgTag && bCreateRule)
+    std::shared_ptr<CPVREpgInfoTag> epgTag = CPVRItem(item).GetEpgInfoTag();
+    if (epgTag)
+    {
+      if (epgTag->IsGapTag())
+        epgTag.reset(); // for gap tags, we can only create instant timers
+    }
+    else if (bCreateRule)
     {
       CLog::LogF(LOGERROR, "No epg tag!");
       return false;
@@ -667,6 +675,16 @@ namespace PVR
                 if (epgTag->ProgressPercentage() > 90.0f)
                   ePreselect = RECORD_NEXT_SHOW;
               }
+            }
+
+            if (ePreselect == RECORD_INSTANTRECORDTIME)
+            {
+              if (iDurationDefault == 30)
+                ePreselect = RECORD_30_MINUTES;
+              else if (iDurationDefault == 60)
+                ePreselect = RECORD_60_MINUTES;
+              else if (iDurationDefault == 120)
+                ePreselect = RECORD_120_MINUTES;
             }
 
             selector.PreSelectAction(ePreselect);
@@ -1102,6 +1120,34 @@ namespace PVR
                                             CVariant{item->GetLabel()});
   }
 
+  bool CPVRGUIActions::DeleteWatchedRecordings(const std::shared_ptr<CFileItem>& item) const
+  {
+    if (!item->m_bIsFolder || item->IsParentFolder())
+      return false;
+
+    if (!ConfirmDeleteWatchedRecordings(item))
+      return false;
+
+    if (!AsyncDeleteRecording(true).Execute(item))
+    {
+      HELPERS::ShowOKDialogText(
+          CVariant{257},
+          CVariant{
+              19111}); // "Error", "PVR backend error. Check the log for more information about this message."
+      return false;
+    }
+
+    return true;
+  }
+
+  bool CPVRGUIActions::ConfirmDeleteWatchedRecordings(const std::shared_ptr<CFileItem>& item) const
+  {
+    return CGUIDialogYesNo::ShowAndGetInput(
+        CVariant{122}, // "Confirm delete"
+        CVariant{19328}, // "Delete all watched recordings in this folder?"
+        CVariant{""}, CVariant{item->GetLabel()});
+  }
+
   bool CPVRGUIActions::DeleteAllRecordingsFromTrash() const
   {
     if (!ConfirmDeleteAllRecordingsFromTrash())
@@ -1201,7 +1247,7 @@ namespace PVR
 
   void CPVRGUIActions::CheckAndSwitchToFullscreen(bool bFullscreen) const
   {
-    CMediaSettings::GetInstance().SetVideoStartWindowed(!bFullscreen);
+    CMediaSettings::GetInstance().SetMediaStartWindowed(!bFullscreen);
 
     if (bFullscreen)
     {
@@ -1369,7 +1415,24 @@ namespace PVR
         }
       }
 
-      StartPlayback(new CFileItem(channel), m_settings.GetBoolValue(CSettings::SETTING_PVRPLAYBACK_SWITCHTOFULLSCREEN));
+      bool bFullscreen;
+      switch (m_settings.GetIntValue(CSettings::SETTING_PVRPLAYBACK_SWITCHTOFULLSCREENCHANNELTYPES))
+      {
+        case 0: // never
+          bFullscreen = false;
+          break;
+        case 1: // TV channels
+          bFullscreen = !channel->IsRadio();
+          break;
+        case 2: // Radio channels
+          bFullscreen = channel->IsRadio();
+          break;
+        case 3: // TV and radio channels
+        default:
+          bFullscreen = true;
+          break;
+      }
+      StartPlayback(new CFileItem(channel), bFullscreen);
       return true;
     }
     else if (result == ParentalCheckResult::FAILED)
@@ -1479,7 +1542,7 @@ namespace PVR
       channel = channels.front()->channel;
     }
 
-    CLog::Log(LOGNOTICE, "PVR is starting playback of channel '%s'", channel->ChannelName().c_str());
+    CLog::Log(LOGINFO, "PVR is starting playback of channel '%s'", channel->ChannelName().c_str());
     CServiceBroker::GetPVRManager().PlaybackState()->SetPlayingGroup(group);
     return SwitchToChannel(std::make_shared<CFileItem>(channel), true);
   }
@@ -1557,7 +1620,7 @@ namespace PVR
       pDialog->Reset();
       pDialog->SetHeading(CVariant{19119}); // "On which backend do you want to search?"
 
-      for (const auto client : possibleScanClients)
+      for (const auto& client : possibleScanClients)
         pDialog->Add(client->GetFriendlyName());
 
       pDialog->Open();
@@ -1683,7 +1746,8 @@ namespace PVR
 
     if (CServiceBroker::GetPVRManager().PlaybackState()->IsPlaying())
     {
-      CLog::Log(LOGNOTICE, "PVR is stopping playback for %s database reset", bResetEPGOnly ? "EPG" : "PVR and EPG");
+      CLog::Log(LOGINFO, "PVR is stopping playback for %s database reset",
+                bResetEPGOnly ? "EPG" : "PVR and EPG");
       CApplicationMessenger::GetInstance().SendMsg(TMSG_MEDIA_STOP);
     }
 
@@ -1748,7 +1812,8 @@ namespace PVR
 
     CLog::LogFC(LOGDEBUG, LOGPVR, "%s database cleared", bResetEPGOnly ? "EPG" : "PVR and EPG");
 
-    CLog::Log(LOGNOTICE, "Restarting the PVR Manager after %s database reset", bResetEPGOnly ? "EPG" : "PVR and EPG");
+    CLog::Log(LOGINFO, "Restarting the PVR Manager after %s database reset",
+              bResetEPGOnly ? "EPG" : "PVR and EPG");
     CServiceBroker::GetPVRManager().Start();
 
     pDlgProgress->SetPercentage(100);

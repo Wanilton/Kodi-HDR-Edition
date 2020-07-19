@@ -27,6 +27,7 @@
 #include "pvr/channels/PVRChannel.h"
 #include "pvr/channels/PVRChannelGroup.h"
 #include "pvr/channels/PVRChannelGroupsContainer.h"
+#include "pvr/channels/PVRChannelsPath.h"
 #include "pvr/epg/EpgChannelData.h"
 #include "pvr/epg/EpgContainer.h"
 #include "pvr/epg/EpgInfoTag.h"
@@ -368,9 +369,16 @@ bool CGUIWindowPVRGuideBase::OnMessage(CGUIMessage& message)
   switch (message.GetMessage())
   {
     case GUI_MSG_WINDOW_INIT:
-      // if a path to a channel group is given we must init that group instead of last played/selected group
-      m_channelGroupPath = message.GetStringParam(0);
+    {
+      const CPVRChannelsPath path(message.GetStringParam(0));
+      if (path.IsValid() && path.IsChannelGroup())
+      {
+        // if a path to a channel group is given we must init
+        // that group instead of last played/selected group
+        m_channelGroupPath = message.GetStringParam(0);
+      }
       break;
+    }
 
     case GUI_MSG_ITEM_SELECTED:
       message.SetParam1(GetCurrentListItemIndex(GetCurrentListItem()));
@@ -393,7 +401,7 @@ bool CGUIWindowPVRGuideBase::OnMessage(CGUIMessage& message)
         }
 
         const std::shared_ptr<CFileItem> pItem = GetCurrentListItem();
-        if (pItem && !pItem->GetEPGInfoTag()->IsGapTag())
+        if (pItem)
         {
           switch (message.GetParam1())
           {
@@ -491,43 +499,6 @@ bool CGUIWindowPVRGuideBase::OnMessage(CGUIMessage& message)
               OnPopupMenu(GetCurrentListItemIndex(pItem));
               bReturn = true;
               break;
-          }
-        }
-        else
-        {
-          switch (message.GetParam1())
-          {
-            case ACTION_SELECT_ITEM:
-            case ACTION_MOUSE_LEFT_CLICK:
-            case ACTION_PLAYER_PLAY:
-            {
-              // EPG "gap" selected => switch to associated channel.
-              CGUIEPGGridContainer* epgGridContainer = GetGridControl();
-              if (epgGridContainer)
-              {
-                const CFileItemPtr item(epgGridContainer->GetSelectedGridItem());
-                if (item)
-                {
-                  CServiceBroker::GetPVRManager().GUIActions()->SwitchToChannel(item, true);
-                  bReturn = true;
-                }
-              }
-              break;
-            }
-            case ACTION_CONTEXT_MENU:
-            {
-              // EPG "gap" selected => create and process special context menu with item independent entries.
-              CContextButtons buttons;
-              GetContextButtons(-1, buttons);
-
-              int iButton = CGUIDialogContextMenu::ShowAndGetChoice(buttons);
-              if (iButton >= 0)
-              {
-                OnContextButton(-1, static_cast<CONTEXT_BUTTON>(iButton));
-              }
-              bReturn = true;
-              break;
-            }
           }
         }
       }
@@ -760,7 +731,7 @@ bool CGUIWindowPVRGuideBase::OpenDateSelectionDialog()
 {
   bool bReturn = false;
 
-  SYSTEMTIME date;
+  KODI::TIME::SystemTime date;
   CGUIEPGGridContainer* epgGridContainer = GetGridControl();
   epgGridContainer->GetSelectedDate().GetAsSystemTime(date);
 

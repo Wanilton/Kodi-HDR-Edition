@@ -21,14 +21,6 @@ namespace ADDON
 CPluginSource::CPluginSource(const AddonInfoPtr& addonInfo, TYPE addonType) : CAddon(addonInfo, addonType)
 {
   std::string provides = addonInfo->Type(addonType)->GetValue("provides").asString();
-  if (!provides.empty())
-    addonInfo->AddExtraInfo("provides", provides);
-  else
-  {
-    const auto& i = addonInfo->ExtraInfo().find("provides");
-    if (i != addonInfo->ExtraInfo().end())
-      provides = i->second;
-  }
 
   for (auto values : addonInfo->Type(addonType)->GetValues())
   {
@@ -80,29 +72,14 @@ CPluginSource::Content CPluginSource::Translate(const std::string &content)
     return CPluginSource::UNKNOWN;
 }
 
-TYPE CPluginSource::FullType() const
-{
-  if (Provides(VIDEO))
-    return ADDON_VIDEO;
-  if (Provides(AUDIO))
-    return ADDON_AUDIO;
-  if (Provides(IMAGE))
-    return ADDON_IMAGE;
-  if (Provides(GAME))
-    return ADDON_GAME;
-  if (Provides(EXECUTABLE))
-    return ADDON_EXECUTABLE;
-
-  return CAddon::FullType();
-}
-
-bool CPluginSource::IsType(TYPE type) const
+bool CPluginSource::HasType(TYPE type) const
 {
   return ((type == ADDON_VIDEO && Provides(VIDEO))
        || (type == ADDON_AUDIO && Provides(AUDIO))
        || (type == ADDON_IMAGE && Provides(IMAGE))
        || (type == ADDON_GAME && Provides(GAME))
-       || (type == ADDON_EXECUTABLE && Provides(EXECUTABLE)));
+       || (type == ADDON_EXECUTABLE && Provides(EXECUTABLE))
+       || (type == CAddon::Type()));
 }
 
 } /*namespace ADDON*/
