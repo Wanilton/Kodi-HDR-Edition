@@ -1212,7 +1212,7 @@
           <default>true</default>
           <control type="toggle" />
         </setting>
-        <setting id="pvrmanager.usebackendchannelnumbersalways" type="boolean" label="19329" help="36358">
+		<setting id="pvrmanager.usebackendchannelnumbersalways" type="boolean" label="19329" help="36358">
           <level>3</level>
           <dependencies>
             <dependency type="visible" on="property" name="pvrsettingvisible" setting="pvrmanager.usebackendchannelnumbersalways" operator="is">true</dependency>
@@ -1723,22 +1723,22 @@
           </updates>
           <control type="edit" format="integer" />
         </setting>
-        <setting id="services.webserverauthentication" parent="services.webserver" type="boolean" label="1052" help="1053">
+		<setting id="services.webserverauthentication" parent="services.webserver" type="boolean" label="1052" help="1053">
           <level>1</level>
           <default>true</default>
           <control type="toggle" />
         </setting>
         <setting id="services.webserverusername" type="string" parent="services.webserver" label="1048" help="36330">
           <level>1</level>
-          <default>kodi</default>
+          <default>kodi</default>          
           <updates>
             <update type="change" />
-          </updates>
+          </updates>          
           <control type="edit" format="string" />
         </setting>
         <setting id="services.webserverpassword" type="string" parent="services.webserver" label="733" help="36331">
           <level>1</level>
-          <default></default>
+          <default></default>          
           <constraints>
             <allowempty>true</allowempty>
           </constraints>
@@ -2941,7 +2941,7 @@
           <default>false</default>
           <control type="toggle" />
         </setting>
-        <setting id="addons.updatemode" type="integer" parent="addons.unknownsources" label="36422" help="36423">
+		<setting id="addons.updatemode" type="integer" parent="addons.unknownsources" label="36422" help="36423">
           <level>1</level>
           <default>0</default>
           <constraints>
@@ -3021,10 +3021,10 @@
       </group>
     </category>
     <category id="cache" label="439" help="36399">
-      <visible>false</visible>
+      <visible>true</visible>
       <group id="1">
         <setting id="cache.harddisk" type="integer" label="14025" help="36400">
-          <level>4</level>
+          <level>1</level>
           <default>256</default>
           <constraints>
             <minimum label="351">0</minimum>
@@ -3038,7 +3038,7 @@
       </group>
       <group id="2">
         <setting id="cachevideo.dvdrom" type="integer" label="14026" help="36401">
-          <level>4</level>
+          <level>1</level>
           <default>2048</default>
           <constraints>
             <minimum label="351">0</minimum>
@@ -3050,7 +3050,7 @@
           </control>
         </setting>
         <setting id="cachevideo.lan" type="integer" label="14027" help="36402">
-          <level>4</level>
+          <level>1</level>
           <default>2048</default>
           <constraints>
             <minimum label="351">0</minimum>
@@ -3062,7 +3062,7 @@
           </control>
         </setting>
         <setting id="cachevideo.internet" type="integer" label="14028" help="36403">
-          <level>4</level>
+          <level>1</level>
           <default>4096</default>
           <constraints>
             <minimum label="351">0</minimum>
@@ -3076,7 +3076,7 @@
       </group>
       <group id="3">
         <setting id="cacheaudio.dvdrom" type="integer" label="14030" help="36404">
-          <level>4</level>
+          <level>1</level>
           <default>256</default>
           <constraints>
             <minimum label="351">0</minimum>
@@ -3100,7 +3100,7 @@
           </control>
         </setting>
         <setting id="cacheaudio.internet" type="integer" label="14032" help="36406">
-          <level>4</level>
+          <level>1</level>
           <default>256</default>
           <constraints>
             <minimum label="351">0</minimum>
