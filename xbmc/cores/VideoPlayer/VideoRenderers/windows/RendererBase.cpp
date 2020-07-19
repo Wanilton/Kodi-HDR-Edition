@@ -1,4 +1,4 @@
-﻿/*
+/*
  *  Copyright (C) 2017-2019 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
@@ -10,21 +10,16 @@
 
 #include "DVDCodecs/Video/DVDVideoCodec.h"
 #include "DVDCodecs/Video/DXVA.h"
-#include "Process/VideoBuffer.h"
+#include "ServiceBroker.h"
 #include "VideoRenderers/BaseRenderer.h"
 #include "VideoRenderers/RenderFlags.h"
+#include "cores/VideoPlayer/Buffers/VideoBuffer.h"
 #include "rendering/dx/RenderContext.h"
+#include "settings/Settings.h"
+#include "settings/SettingsComponent.h"
 #include "utils/MemUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
-
-#include <Windows.h>
-#include <d3d11_4.h>
-#include <dxgi1_5.h>
-
-#include "settings/AdvancedSettings.h"
-#include "settings/SettingsComponent.h"
-
 
 using namespace Microsoft::WRL;
 
@@ -52,6 +47,7 @@ void CRenderBuffer::ReleasePicture()
   if (videoBuffer)
     videoBuffer->Release();
   videoBuffer = nullptr;
+  m_bLoaded = false;
 }
 
 CRenderBuffer::CRenderBuffer(AVPixelFormat av_pix_format, unsigned width, unsigned height)
@@ -138,6 +134,13 @@ CRendererBase::CRendererBase(CVideoSettings& videoSettings)
 
 CRendererBase::~CRendererBase()
 {
+  if (DX::Windowing()->IsHDROutput())
+  {
+    CLog::LogF(LOGDEBUG, "Restoring SDR rendering");
+    DX::Windowing()->SetHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+    if (m_AutoSwitchHDR)
+      DX::Windowing()->ToggleHDR(); // Toggle display HDR OFF
+  }
   Flush(false);
 }
 
@@ -162,9 +165,6 @@ CRenderInfo CRendererBase::GetRenderInfo()
 
 bool CRendererBase::Configure(const VideoPicture& picture, float fps, unsigned orientation)
 {
-  DXGI_ADAPTER_DESC id = {};
-  DX::DeviceResources::Get()->GetAdapterDesc(&id);
-
   m_iNumBuffers = 0;
   m_iBufferIndex = 0;
 
@@ -173,17 +173,28 @@ bool CRendererBase::Configure(const VideoPicture& picture, float fps, unsigned o
   m_fps = fps;
   m_renderOrientation = orientation;
 
-  if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_autohdr &&
-      picture.color_primaries == AVCOL_PRI_BT2020)
-    DX::Windowing()->WinHDR_ON();
+  m_lastHdr10 = {};
+  m_iCntMetaData = 0;
+  m_HdrType = HDR_TYPE::HDR_NONE_SDR;
+  m_AutoSwitchHDR = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+                        DX::Windowing()->SETTING_WINSYSTEM_IS_HDR_DISPLAY) &&
+                    DX::Windowing()->IsHDRDisplay();
 
-    if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_autohdr &&
-      picture.color_primaries != AVCOL_PRI_BT2020)
-    DX::Windowing()->WinHDR_OFF();
-
-  if (picture.color_primaries != AVCOL_PRI_BT2020 && id.VendorId == 0x1002)
-    DX::Windowing()->SetHdrAMD(false, 0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290, 1.0, 1000,
-                               1000, 100);
+  // Auto switch HDR only if supported and "Settings/Player/Use HDR display capabilities" = ON
+  if (m_AutoSwitchHDR)
+  {
+    // Stream is HDR10 or HLG or Rec.2020 (wide color)
+    if (picture.color_primaries == AVCOL_PRI_BT2020)
+    {
+      if (!DX::Windowing()->IsHDROutput())
+        DX::Windowing()->ToggleHDR(); // Toggle disply HDR ON
+    }
+    else // Stream is SDR
+    {
+      if (DX::Windowing()->IsHDROutput())
+        DX::Windowing()->ToggleHDR(); // Toggle display HDR OFF
+    }
+  }
 
   return true;
 }
@@ -218,7 +229,7 @@ void CRendererBase::Render(CD3DTexture& target, const CRect& sourceRect, const C
       return;
   }
 
-  HDR(buf);
+  ProcessHDR(buf);
 
   if (m_viewWidth != static_cast<unsigned>(viewRect.Width()) ||
     m_viewHeight != static_cast<unsigned>(viewRect.Height()))
@@ -417,7 +428,7 @@ void CRendererBase::CheckVideoParameters()
   CRenderBuffer* buf = m_renderBuffers[m_iBufferIndex];
 
   bool toneMap = false;
-  if (m_videoSettings.m_ToneMapMethod != VS_TONEMAPMETHOD_OFF)
+  if (m_videoSettings.m_ToneMapMethod != VS_TONEMAPMETHOD_OFF && !DX::Windowing()->IsHDROutput())
   {
     if (buf->hasLightMetadata || buf->hasDisplayMetadata && buf->displayMetadata.has_luminance)
       toneMap = true;
@@ -470,52 +481,116 @@ AVPixelFormat CRendererBase::GetAVFormat(DXGI_FORMAT dxgi_format)
   }
 }
 
-int CRendererBase::HDR(CRenderBuffer * meta)
+DXGI_HDR_METADATA_HDR10 CRendererBase::GetDXGIHDR10MetaData(CRenderBuffer* rb)
 {
-  double rx = av_q2d(meta->displayMetadata.display_primaries[0][0]);
-  double ry = av_q2d(meta->displayMetadata.display_primaries[0][1]);
-  double gx = av_q2d(meta->displayMetadata.display_primaries[1][0]);
-  double gy = av_q2d(meta->displayMetadata.display_primaries[1][1]);
-  double bx = av_q2d(meta->displayMetadata.display_primaries[2][0]);
-  double by = av_q2d(meta->displayMetadata.display_primaries[2][1]);
-  double wx = av_q2d(meta->displayMetadata.white_point[0]);
-  double wy = av_q2d(meta->displayMetadata.white_point[1]);
-  double maxmaster = av_q2d(meta->displayMetadata.max_luminance);
-  double minmaster = av_q2d(meta->displayMetadata.min_luminance);
-  double maxFALL = meta->lightMetadata.MaxFALL;
-  double maxCLL = meta->lightMetadata.MaxCLL;
+  DXGI_HDR_METADATA_HDR10 hdr10 = {};
 
-   if (meta->primaries != AVCOL_PRI_BT2020)
+  if (rb->displayMetadata.has_primaries)
   {
-    DX::Windowing()->SetHdrMonitorMode(false, rx, ry, gx, gy, bx, by, wx, wy, maxmaster, minmaster,
-                                       maxCLL, maxFALL);
-    return 0;
+    hdr10.RedPrimary[0] = static_cast<uint16_t>(rb->displayMetadata.display_primaries[0][0].num);
+    hdr10.RedPrimary[1] = static_cast<uint16_t>(rb->displayMetadata.display_primaries[0][1].num);
+    hdr10.GreenPrimary[0] = static_cast<uint16_t>(rb->displayMetadata.display_primaries[1][0].num);
+    hdr10.GreenPrimary[1] = static_cast<uint16_t>(rb->displayMetadata.display_primaries[1][1].num);
+    hdr10.BluePrimary[0] = static_cast<uint16_t>(rb->displayMetadata.display_primaries[2][0].num);
+    hdr10.BluePrimary[1] = static_cast<uint16_t>(rb->displayMetadata.display_primaries[2][1].num);
+    hdr10.WhitePoint[0] = static_cast<uint16_t>(rb->displayMetadata.white_point[0].num);
+    hdr10.WhitePoint[1] = static_cast<uint16_t>(rb->displayMetadata.white_point[1].num);
+  }
+  if (rb->displayMetadata.has_luminance)
+  {
+    hdr10.MaxMasteringLuminance = static_cast<uint32_t>(rb->displayMetadata.max_luminance.num);
+    hdr10.MinMasteringLuminance = static_cast<uint32_t>(rb->displayMetadata.min_luminance.num);
+  }
+  if (rb->hasLightMetadata)
+  {
+    hdr10.MaxContentLightLevel = static_cast<uint16_t>(rb->lightMetadata.MaxCLL);
+    hdr10.MaxFrameAverageLightLevel = static_cast<uint16_t>(rb->lightMetadata.MaxFALL);
   }
 
-  if (meta->color_transfer == AVCOL_TRC_SMPTE2084 && meta->primaries == AVCOL_PRI_BT2020 ||
-      meta->color_transfer == AVCOL_TRC_ARIB_STD_B67 && meta->primaries == AVCOL_PRI_BT2020)
-  {
-  DX::Windowing()->SetHdrAMD(true, rx, ry, gx, gy, bx, by, wx, wy, minmaster, maxmaster, maxCLL,
-                                 maxFALL);
-
-  DX::Windowing()->SetHdrMonitorMode(true, rx, ry, gx, gy, bx, by, wx, wy, maxmaster, minmaster,
-                                         maxCLL, maxFALL);
+  return hdr10;
 }
 
+void CRendererBase::ProcessHDR(CRenderBuffer* rb)
+{
+  if (m_AutoSwitchHDR && rb->primaries == AVCOL_PRI_BT2020 && !DX::Windowing()->IsHDROutput())
+  {
+    DX::Windowing()->ToggleHDR(); // Toggle display HDR ON
+  }
 
+  if (!DX::Windowing()->IsHDROutput())
+    return;
 
-  CLog::LogF(LOGNOTICE, "Metadata RX: %f.", rx);
-  CLog::LogF(LOGNOTICE, "Metadata RY: %f.", ry);
-  CLog::LogF(LOGNOTICE, "Metadata GX: %f.", gx);
-  CLog::LogF(LOGNOTICE, "Metadata GY: %f.", gy);
-  CLog::LogF(LOGNOTICE, "Metadata BX: %f.", bx);
-  CLog::LogF(LOGNOTICE, "Metadata BY: %f.", by);
-  CLog::LogF(LOGNOTICE, "Metadata WX: %f.", wx);
-  CLog::LogF(LOGNOTICE, "Metadata WY: %f.", wy);
-  CLog::LogF(LOGNOTICE, "Metadata MaxMaster: %f.", maxmaster);
-  CLog::LogF(LOGNOTICE, "Metadata MinMaster: %f.", minmaster);
-  CLog::LogF(LOGNOTICE, "Metadata maxFALL: %f.", maxFALL);
-  CLog::LogF(LOGNOTICE, "Metadata maxCLL: %f.", maxCLL);
-
-  return 0;
+  // HDR10
+  if (rb->color_transfer == AVCOL_TRC_SMPTE2084 && rb->primaries == AVCOL_PRI_BT2020)
+  {
+    DXGI_HDR_METADATA_HDR10 hdr10 = GetDXGIHDR10MetaData(rb);
+    if (m_HdrType == HDR_TYPE::HDR_HDR10)
+    {
+      // Only Sets HDR10 metadata if differs from previous
+      if (0 != std::memcmp(&hdr10, &m_lastHdr10, sizeof(hdr10)))
+      {
+        // Sets HDR10 metadata only
+        DX::Windowing()->SetHdrMetaData(hdr10);
+        m_lastHdr10 = hdr10;
+      }
+    }
+    else
+    {
+      // Sets HDR10 metadata and enables HDR10 color space (switch to HDR rendering)
+      DX::Windowing()->SetHdrMetaData(hdr10);
+      CLog::LogF(LOGINFO, "Switching to HDR rendering");
+      DX::Windowing()->SetHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+      m_HdrType = HDR_TYPE::HDR_HDR10;
+      m_lastHdr10 = hdr10;
+    }
+    m_iCntMetaData = 0;
+  }
+  // HLG
+  else if (rb->color_transfer == AVCOL_TRC_ARIB_STD_B67 && rb->primaries == AVCOL_PRI_BT2020)
+  {
+    if (m_HdrType != HDR_TYPE::HDR_HLG)
+    {
+      // Switch to HLG rendering
+      CLog::LogF(LOGINFO, "Switching to HLG rendering");
+      DX::Windowing()->SetHdrColorSpace(DXGI_COLOR_SPACE_YCBCR_FULL_GHLG_TOPLEFT_P2020);
+      m_HdrType = HDR_TYPE::HDR_HLG;
+    }
+  }
+  // Rec. 2020
+  else if (rb->primaries == AVCOL_PRI_BT2020)
+  {
+    if (m_HdrType != HDR_TYPE::HDR_REC2020)
+    {
+      // Switch to Rec.2020 rendering
+      CLog::LogF(LOGINFO, "Switching to Rec.2020 rendering");
+      DX::Windowing()->SetHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020);
+      m_HdrType = HDR_TYPE::HDR_REC2020;
+    }
+  }
+  else
+  {
+    if (m_HdrType == HDR_TYPE::HDR_HDR10)
+    {
+      m_iCntMetaData++;
+      if (m_iCntMetaData > 60)
+      {
+        // If more than 60 frames are received without HDR10 metadata switch to SDR rendering
+        CLog::LogF(LOGINFO, "Switching to SDR rendering");
+        DX::Windowing()->SetHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+        m_HdrType = HDR_TYPE::HDR_NONE_SDR;
+        m_iCntMetaData = 0;
+        if (m_AutoSwitchHDR)
+          DX::Windowing()->ToggleHDR(); // Toggle display HDR OFF
+      }
+    }
+    if (m_HdrType == HDR_TYPE::HDR_HLG || m_HdrType == HDR_TYPE::HDR_REC2020)
+    {
+      // Switch to SDR rendering
+      CLog::LogF(LOGINFO, "Switching to SDR rendering");
+      DX::Windowing()->SetHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+      m_HdrType = HDR_TYPE::HDR_NONE_SDR;
+      if (m_AutoSwitchHDR)
+        DX::Windowing()->ToggleHDR(); // Toggle display HDR OFF
+    }
+  }
 }
